@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <!--    <meta http-equiv="refresh" content="2">-->
+    <link rel="icon" href="/FloppyMachine/favicon.ico" type="image/x-icon">
+    <title>Floppy Machine</title>
+    <link rel="stylesheet" href="https://unpkg.com/98.css">
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: #008080;
+        }
+
+        .status-display {
+            border: 2px inset;
+            border-color: #dfdfdf #808080 #808080 #dfdfdf;
+            background: #c0c0c0;
+            padding: 10px;
+            margin: 4px;
+            text-align: center;
+            min-height: 60px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .status-emoji {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .status-text {
+            font-weight: bold;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+<div class="window" style="width: 60%; display: block">
+    <div class="title-bar">
+        <div class="title-bar-text">Floppy Machine</div>
+        <div class="title-bar-controls">
+            <button aria-label="Aiuto" class="help"></button>
+            <button aria-label="Chiudi" class="close"></button>
+        </div>
+    </div>
+
+    <div class="window-body">
+        <div class="status-display">
+            <div class="status-emoji" id="status-emoji">⏳</div>
+            <div class="status-text" id="status-text">Caricamento...</div>
+            <div class="status-sleep" id="status-sleep" style="color: blue; font-weight: bold; padding: 5px;"></div>
+            <div class="status-error" id="status-error" style="color: red; font-weight: bold; padding: 5px;"></div>
+            <div class="progress-indicator segmented">
+                <span class="progress-indicator-bar" id="status-progress" style="width:0%"></span>
+            </div>
+            <div style="padding: 10px; display: flex; justify-content: space-around">
+                <button id="wake-btn">Risveglia</button>
+                <button id="stop-btn" disabled>Arresta</button>
+            </div>
+        </div>
+
+        <fieldset style="margin: 4px; border: 2px solid; border-color: #dfdfdf #808080 #808080 #dfdfdf;">
+            <legend style="padding: 0 4px;">Log Attività</legend>
+            <div class="sunken-panel">
+                <table class="interactive" style="width: -webkit-fill-available;">
+                    <thead>
+                    <tr>
+                        <td>Orario</td>
+                        <td>Azione</td>
+                    </tr>
+                    </thead>
+                    <tbody id="log-body">
+                    <!-- LOG -->
+                    </tbody>
+                </table>
+            </div>
+        </fieldset>
+    </div>
+
+    <div class="status-bar">
+        <p class="status-bar-field">Versione: 1.0.0 BETA</p>
+        <p class="status-bar-field" id="status-status">Status: Online 🟢</p>
+        <p class="status-bar-field" id="last-update">Ultimo aggiornamento: N.D.</p>
+    </div>
+</div>
+
+
+<script>
+    (function () {
+        const statusUrl = 'status.html';
+        const resultUrl = 'result.html';
+        const emojiEl = document.getElementById('status-emoji');
+        const textEl = document.getElementById('status-text');
+        const errorEl = document.getElementById('status-error');
+        const progressEl = document.getElementById('status-progress');
+        const statusEl = document.getElementById('status-status');
+        const lastUpdateEl = document.getElementById('last-update');
+        const wakeBtn = document.getElementById('wake-btn');
+        const sleepEl = document.getElementById('status-sleep');
+        const stopBtn = document.getElementById('stop-btn');
+        const logBody = document.getElementById('log-body');
+        const logUrl = 'log.csv';
+
+        function parseJsonSafe(response) {
+            return response.text().then(function (text) {
+                if (!text || !text.trim()) {
+                    return {};
+                }
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    return {ok: false, error: text.trim()};
+                }
+            });
+        }
+
+        stopBtn.addEventListener('click', () => {
+            textEl.textContent = 'Invio richiesta di arresto...';
+            errorEl.textContent = '';
+
+            fetch('/FloppyMachine/stop.php', {method: 'POST'})
+                .then(parseJsonSafe)
+                .then(j => {
+                    if (j.ok) {
+                        textEl.textContent = 'Richiesta inviata. Floppy Machine si sta arrestando... Possono essere necessari fino a 30 secondi.';
+                    } else {
+                        textEl.textContent = 'Errore nell\'arresto: ' + (j.error || 'Sconosciuto');
+                    }
+                })
+                .catch(err => {
+                    errorEl.textContent = 'Errore di rete: ' + err;
+                });
+        });
+
+
+        const ANIM_DURATION = 60_000;
+        const TARGET_BEFORE_COMPLETE = 95;
+        let animInterval = null;
+        let animStartTime = 0;
+        let animStartPercent = 0;
+
+        const map = [
+            {match: /PRONTO/i, emoji: '🟢', progress: '0%'},
+            {match: /ATTESA|IN ATTESA|INSERIRE FLOPPY/i, emoji: '⌛', progress: '0%'},
+            {match: /FORMATTANDO/i, emoji: '⚙️', progress: 'animate'},
+            {match: /COMPLETATO|FINITO/i, emoji: '✅', progress: '100%'},
+            {match: /ERRORE|ERROR/i, emoji: '❌', progress: '100%'},
+            {match: /RIPOSO/i, emoji: '😴', progress: 'sleep'},
+            {match: /ARRESTO/i, emoji: '🛑', progress: 'stop'},
+        ];
+
+        function startFormattingAnimation() {
+            if (animInterval) return;
+            animStartTime = Date.now();
+            animStartPercent = 0;
+            progressEl.style.width = animStartPercent + '%';
+
+            animInterval = setInterval(() => {
+                const elapsed = Date.now() - animStartTime;
+                const frac = Math.min(1, elapsed / ANIM_DURATION);
+                const pct = animStartPercent + (TARGET_BEFORE_COMPLETE - animStartPercent) * frac;
+                progressEl.style.width = pct.toFixed(1) + '%';
+
+                if (frac >= 1) {
+                    clearInterval(animInterval);
+                    animInterval = null;
+                    progressEl.style.width = TARGET_BEFORE_COMPLETE + '%';
+                }
+            }, 200);
+        }
+
+        function stopFormattingAnimation(finalPercent) {
+            if (animInterval) {
+                clearInterval(animInterval);
+                animInterval = null;
+            }
+            if (finalPercent !== undefined) {
+                progressEl.style.width = String(finalPercent) + '%';
+            }
+        }
+
+        async function fetchErrorDetails() {
+            try {
+                const resp = await fetch(resultUrl + '?_=' + Date.now(), {cache: 'no-store'});
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const txt = await resp.text();
+                errorEl.textContent = txt.trim();
+            } catch (err) {
+                errorEl.textContent = 'Impossibile leggere il dettaglio dell’errore';
+                console.error('Errore fetch result:', err);
+            }
+        }
+
+        async function fetchLogs() {
+            try {
+                const resp = await fetch(logUrl + '?_=' + Date.now(), {cache: 'no-store'});
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+                const txt = await resp.text();
+                const lines = txt.split(/\r?\n/).filter(line => line.trim().length > 0);
+
+                // Mostra gli ultimi 20 eventi in ordine inverso
+                const lastLines = lines.slice(-20).reverse();
+
+                logBody.innerHTML = lastLines.map(line => {
+                    const parts = line.split(';');
+                    const time = (parts[0] || '').trim();
+                    const action = (parts[1] || '').trim();
+
+                    return `<tr>
+                <td>${escapeHtml(time)}</td>
+                <td>${escapeHtml(action)}</td>
+            </tr>`;
+                }).join('');
+            } catch (err) {
+                console.error('Errore fetch log:', err);
+                logBody.innerHTML = `<tr><td colspan="2">Impossibile leggere log.csv</td></tr>`;
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function applyState(raw) {
+            const cleaned = String(raw || '').replace(/^\s*Stato:\s*/i, '').trim();
+            textEl.textContent = cleaned || raw || '';
+            sleepEl.textContent= 'Floppy Machine. Rendi i floppy come nuovi.'
+
+
+            const entry = map.find(m => m.match.test(cleaned));
+            if (entry) {
+                emojiEl.textContent = entry.emoji;
+
+                if (entry.progress === 'animate') {
+                    stopBtn.disabled = true;
+                    errorEl.textContent = '';
+                    startFormattingAnimation();
+                } else {
+                    stopBtn.disabled = false;
+                    const pct = parseFloat(entry.progress) || 0;
+                    stopFormattingAnimation(pct);
+
+                    if (/ERRORE|ERROR/i.test(cleaned)) {
+                        errorEl.textContent = 'Caricamento dettagli errore...';
+                        fetchErrorDetails();
+                    } else {
+                        errorEl.textContent = '';
+                    }
+                }
+                if (entry.progress === 'sleep') {
+                    stopBtn.disabled = true;
+                    sleepEl.textContent = 'Floppy Machine sta riposando per preservare energia. Il prossimo risveglio programmato sarà tra 1 ora.';
+                    errorEl.textContent = 'Per risvegliare ora Floppy Machine, clicca il pulsante "Risveglia".';
+                    wakeBtn.disabled = false;
+                    wakeBtn.addEventListener('click', () => {
+                        textEl.textContent = 'Invio richiesta...';
+                        fetch('/FloppyMachine/wake.php', {method: 'POST'})
+                            .then(r => r.json())
+                            .then(j => {
+                                if (j.ok) textEl.textContent = 'Richiesta inviata. Floppy Machine si sta risvegliando... Possono essere necessari fino a 30 secondi.';
+                                else textEl.textContent = 'Errore nel risveglio: ' + (j.error || 'Sconosciuto');
+                            })
+                            .catch(err => errorEl.textContent = 'Errore di rete: ' + err);
+                    });
+                } else {
+                    wakeBtn.disabled = true;
+                }
+                if (entry.progress === 'stop') {
+                    sleepEl.textContent = 'Floppy Machine si sta spegnendo. Per formattare altri Floppy Disk riavviare la macchina';
+                    errorEl.textContent = '! ATTENZIONE ! non scollegare l\'alimentazione il sottosistema di Floppy Machine è ancora attivo. Spegnere la macchina dal pulsante sul case.'
+                    stopBtn.disabled = true;
+                }
+            } else {
+                emojiEl.textContent = 'ℹ️';
+                sleepEl.textContent= 'Floppy Machine. Rendi i floppy come nuovi.'
+                wakeBtn.disabled = true;
+                stopFormattingAnimation(0);
+                errorEl.textContent = '';
+            }
+
+            lastUpdateEl.textContent = "Ultimo aggiornamento: " + new Date().toLocaleString();
+        }
+
+        async function fetchStatus() {
+            try {
+                const resp = await fetch(statusUrl + '?_=' + Date.now(), {cache: 'no-store'});
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const txt = await resp.text();
+                const firstLine = txt.split(/\r?\n/).find(l => l.trim().length);
+                applyState(firstLine || txt);
+                statusEl.textContent = "Status: Online 🟢";
+            } catch (err) {
+                textEl.textContent = 'Impossibile leggere lo stato';
+                emojiEl.textContent = '❗';
+                stopFormattingAnimation(0);
+                errorEl.textContent = '';
+                console.error('Errore fetch status:', err);
+                statusEl.textContent = "Status: Offline ❌";
+            }
+        }
+
+        fetchStatus();
+        fetchLogs();
+        setInterval(fetchStatus, 2000);
+        setInterval(fetchLogs, 2000);
+    })();
+</script>
+</body>
+</html>
