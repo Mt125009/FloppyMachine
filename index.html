@@ -45,7 +45,7 @@
     <div class="title-bar">
         <div class="title-bar-text">Floppy Machine</div>
         <div class="title-bar-controls">
-            <button aria-label="Aiuto" class="help"></button>
+            <button aria-label="Aiuto" class="help" id="help"></button>
             <button aria-label="Chiudi" class="close"></button>
         </div>
     </div>
@@ -93,6 +93,7 @@
 
 <script>
     (function () {
+        const helpBtn = document.getElementById('help');
         const statusUrl = 'status.html';
         const resultUrl = 'result.html';
         const emojiEl = document.getElementById('status-emoji');
@@ -119,6 +120,10 @@
                 }
             });
         }
+
+        helpBtn.addEventListener('click', () => {
+            open('https://github.com/Mt125009/FloppyMachine.git')
+        })
 
         stopBtn.addEventListener('click', () => {
             textEl.textContent = 'Invio richiesta di arresto...';
